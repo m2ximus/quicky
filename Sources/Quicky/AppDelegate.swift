@@ -40,9 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggle() {
         switch state {
         case .idle: begin()
+        case .selecting: selector.cancel()
         case .countdown: cancelCountdown()
         case .recording: stop()
-        case .selecting, .starting, .encoding: break
+        case .starting, .encoding: break
         }
     }
 

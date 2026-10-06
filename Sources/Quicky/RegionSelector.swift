@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 struct Selection {
     let screen: NSScreen
@@ -20,7 +21,7 @@ extension NSScreen {
 /// Dims every screen and lets the user drag out a rectangle, or click a window, on one of them.
 final class RegionSelector {
     private var windows: [NSWindow] = []
-    private var keyMonitor: Any?
+    private var escapeKey: HotKey?
     private var previousApp: NSRunningApplication?
     private var completion: ((Selection?) -> Void)?
 
@@ -49,12 +50,14 @@ final class RegionSelector {
             window.makeKeyAndOrderFront(nil)
             windows.append(window)
         }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event } // Esc
-            self?.finish(nil)
-            return nil
-        }
+        // A system-wide hotkey, not a local key monitor: macOS may refuse to activate us, and the
+        // overlay would then cover every screen with no key press able to dismiss it.
+        escapeKey = HotKey(keyCode: kVK_Escape, modifiers: 0, id: 2) { [weak self] in self?.cancel() }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func cancel() {
+        finish(nil)
     }
 
     /// Frames of other apps' normal windows, front to back, in global top-left coordinates.
@@ -75,8 +78,7 @@ final class RegionSelector {
     private func finish(_ selection: Selection?) {
         guard let completion else { return }
         self.completion = nil
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
+        escapeKey = nil
         windows.forEach { $0.close() }
         windows = []
         // Give focus back so the recorded app does not look inactive.
@@ -157,16 +159,21 @@ private final class OverlayView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.35).setFill()
+        NSColor.black.withAlphaComponent(0.45).setFill()
         bounds.fill()
         guard let selection else {
             if let hovered {
-                NSColor.clear.setFill()
+                // Lift the hovered window a little, but keep it dimmed: a window as big as the screen
+                // would otherwise leave no visible sign that Quicky is waiting for a selection.
+                NSColor.black.withAlphaComponent(0.2).setFill()
                 hovered.fill(using: .copy)
                 NSColor.white.setStroke()
-                NSBezierPath(rect: hovered.insetBy(dx: -0.5, dy: -0.5)).stroke()
+                let outline = NSBezierPath(rect: hovered.insetBy(dx: -1, dy: -1))
+                outline.lineWidth = 2
+                outline.stroke()
+                drawLabel("Click to record this window", centeredAt: CGPoint(x: hovered.midX, y: hovered.midY))
             }
-            drawLabel("Drag a region, or click a window  ·  Esc to cancel", centeredAt: CGPoint(x: bounds.midX, y: 40))
+            drawLabel("Quicky: drag a region, or click a window  ·  Esc to cancel", centeredAt: CGPoint(x: bounds.midX, y: hovered == nil ? bounds.midY : 60))
             return
         }
         NSColor.clear.setFill()
@@ -178,10 +185,14 @@ private final class OverlayView: NSView {
 
     private func drawLabel(_ text: String, centeredAt point: CGPoint) {
         let string = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .font: NSFont.systemFont(ofSize: 15, weight: .medium),
             .foregroundColor: NSColor.white,
         ])
         let size = string.size()
-        string.draw(at: CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2))
+        let origin = CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2)
+        // A dark pill behind the text keeps it readable over any content.
+        NSColor.black.withAlphaComponent(0.7).setFill()
+        NSBezierPath(roundedRect: CGRect(origin: origin, size: size).insetBy(dx: -14, dy: -8), xRadius: 10, yRadius: 10).fill()
+        string.draw(at: origin)
     }
 }
